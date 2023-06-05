@@ -4,7 +4,6 @@ Examples of various scripts that include machine learning (Pytorch, Tensorflow, 
 
 # Table of contents
 1. [Neural Net to Predict Probability of Loan Default (R)](#loanNNR)
-2. [Behavior Sequence Transformer to 
 3. [Support Vector Model using Titanic Dataset (R)](#svmR)
 4. [Decision Tree to Predict Animal Species (R)](#decTreeR)
 5. [Decision Tree to Predict Animal Species (Python)](#decTreePy)
