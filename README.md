@@ -3,10 +3,31 @@ Examples of various scripts that include machine learning (Pytorch, Tensorflow, 
 
 
 # Table of contents
+1. [RNN and Naive Bayes to Detect Fake News (R Markdown)](#newsRNN)
 1. [Neural Net to Predict Probability of Loan Default (R)](#loanNNR)
 3. [Support Vector Model using Titanic Dataset (R)](#svmR)
 4. [Decision Tree to Predict Animal Species (R)](#decTreeR)
 5. [Decision Tree to Predict Animal Species (Python)](#decTreePy)
+
+## **News: Fake or Real?:**<a name="newsRNN"></a>
+
+**Files included:** FakeNewsNLP.html
+
+**Purpose:** Detect if a news article is real or fake
+
+The script has heavy data cleaning and exploration because of the messy nature of the datasets (and my own curiousity). The data focuses on the 2015-2018 time period that contained the 2016 presidential election. Unfortunately upon data exploration, it was noted that ALL real news sources came from the same news source, making this model mostly impractical. However, there are still some interesting insights from this: mainly the difference in words that fake news focuses on vs the words real news focuses on. It was also shown that fake news is more likely to report on specific people and politicians rather than groups of people or nations. Real news is also more likely to report on worldly events, whereas fake news focused on internal politicians. 
+
+The model was created from document term matrix (DTM) derived from a corpus of lemmas. The DTM was then fed through an RNN model with two dense layers along with a single gated recurrent unit, along with a single long term short memory layer. The RNN model had a flat value for the training loss, along with only ~50% accuracy in each epoch, indicating the model was not learning at all. The methodology was then switched to use a Naive Bayes model which detected the fake news with an 86% accuracy. However, it was more prone to indicate real news as fake rather than vice versa. I attribute this to the fact that only a single news source was used for real news dataset, giving it much less diversity in the training set. 
+
+
+**Libraries used:** dplyr, plotly, stopwords, stringr, tm, tidytext, tidyr, wordcloud2, karas, tensorflow, naivebayes
+
+**Output:** 
+
+![image](https://github.com/PlaidDragon/Machine-Learning/assets/135033377/f5e90c2d-9de7-4d7b-9377-bb2a53b1f1e6)
+
+
+
 
 
 ## **Neural Net:**<a name="loanNNR"></a>
