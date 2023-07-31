@@ -11,7 +11,7 @@ Examples of various scripts that include machine learning (Pytorch, Tensorflow, 
 
 ## **News: Fake or Real?:**<a name="newsRNN"></a>
 
-**Files included:** FakeNewsNLP.html
+**Files included:** FakeNewsNLP.html, FakeNewsNLP.Rmd
 
 **Purpose:** Detect if a news article is real or fake
 
