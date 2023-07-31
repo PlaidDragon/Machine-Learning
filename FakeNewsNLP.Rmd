@@ -1,0 +1,575 @@
+---
+title: "Fake or Real News? An NLP Model"
+author: "Kristana Reed"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    theme: united
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 90% !important;
+  margin: auto;
+}
+</style>
+
+## Purpose
+Fake news is a big topic, and what with Machine Learning taking off as it is, I imagine it will become even more important to be able to distinguish between fake and real news sources. I came accross this dataset on Kaggle and thought it would be fun to try to build an NLP model that could distinguish between real and fake news sources.
+
+## Setting up the Script
+First steps are pretty intuitive:
+* Call needed Libraries
+* Read in necessary data
+```{r InitializeData, echo=TRUE, results=FALSE, message=FALSE}
+library(dplyr)
+library(plotly)
+library(stopwords)
+library(stringr)
+library(tm)
+library(tidytext)
+library(textstem)
+library(tidyr)
+library(wordcloud2)
+library(splitTools)
+library(keras)
+library(Matrix)
+library(factoextra)
+library(tensorflow)
+library(naivebayes)
+
+
+
+#Import Data
+fake_0 <- read.csv("~//AdultStuff//Job Stuff//Portfolio//DataSets//FakeNews////Fake.csv")
+real_0 <- read.csv("~//AdultStuff//Job Stuff//Portfolio//DataSets//FakeNews//True.csv")
+```
+
+## Exploring the Data
+
+We need to actually look at the data, and ensure we are working with the same parameters in both files. 
+```{r explore1, echo=TRUE}
+
+head(fake_0, 1)
+head(real_0,1)
+```
+
+```{r explore1.5, echo=TRUE}
+
+colnames(fake_0)
+colnames(real_0)
+```
+
+```{r explore1.9, echo=TRUE}
+
+substr(real_0$text, 1, 100)[1:5]
+```
+
+It seems that the real data ALL comes from Reuters, and has "LOCATION - (REUTERS)" at the beginning of each text. While this 
+would be great for achieving a nearly perfectly accurate model, that is not realistic so unfortunately, we will have to filter that out and
+have a model that does not perform perfectly (I know, I know. But I'm no cheater). 
+
+
+```{r explore2, echo=TRUE}
+
+real <- real_0 %>%
+  mutate("text" = gsub("^.+\\(reuters\\) ", "", tolower(text)))
+
+substr(real$text, 1, 100)[1:5]
+```
+
+We now need to look for missing values and deal with them as needed
+```{r explore3, echo=TRUE}
+summary(fake_0)
+summary(real_0)
+```
+
+There are technically no NA values, but often times with text data, "NA"s are actually empty strings, so that should also be checked for
+
+```{r explore4}
+
+emptyFake <- fake_0 %>%
+  filter((title == "") | (text == "") | (subject == ""))
+
+emptyReal <- real %>%
+  filter((title == "") | (text == "") | (subject == ""))
+
+print(paste(nrow(emptyFake), "missing from Fake", nrow(emptyReal), "missing from Real"))
+
+```
+
+Fake data is missing 7 values, all subjects. We probably won't use subjects, or dates (see ahead) so it's no matter
+
+## Combining and Visualizing the Data
+
+We still need to look closer at the text. More likely than not, rigorous text cleaning will need to happen. But I kinda love
+Cleaning text data, I just think it's so cool.
+
+First, The data needs to be concatenated, and the dates still need to be cleaned up.
+
+```{r concatination}
+concat <- fake_0 %>%
+  mutate("target" = "Fake",
+         "date" = format(strptime(date, format = "%d-%b-%y"), "%Y-%m-%d")
+         ) %>% #Clean up the date column
+  rbind.data.frame(real %>% mutate("target" = "Real",
+                                     "date" = format(strptime(date, format = "%B %d, %Y"), "%Y-%m-%d")
+                                     )
+                   ) #The files have different date formats
+
+```
+
+Let's look at some distribution stuff before we start cleaning the text, starting with the distribution of news subjects between the two news types. I want to look at the distributions of each, but also compare them a little closer. In this particular case, the csv file was importing strangely and using some commas from the text column as deliminators. This was only an issue for the fake news csv, which has much dirtier data than the real news csv.
+
+To work around it, I went into the csv itself and determined what the subjects were, and manually put them into respective lists.
+
+```{r visualize1, fig.width=10, echo=FALSE}
+fakeSubjects <- c("News", "politics", "Government News", "left-news", "US_News", "Middle-east")
+realSubjects <- c("politicsNews", "worldnews")
+
+
+allSubs <- concat %>% 
+  filter(subject %in% c(fakeSubjects, realSubjects)) %>%
+  group_by(target, subject) %>%
+  mutate("subSum" = max(row_number(subject))) %>%
+  ungroup() %>%
+  distinct(target, subject, subSum) %>%
+  arrange(-subSum)
+orderList <- factor(allSubs$subject, ordered=TRUE, levels=allSubs$subject) #Order the bar plot in decending order
+
+allSubs %>%
+  plot_ly(x=~subject, y=~subSum, color =~target, type='bar', colors=c("#2AB285", "#965483")) %>%
+  layout(yaxis=list(title="Count"),
+         xaxis=list(title="Subject",
+                    categoryorder = "array",
+                    categoryarray = orderList
+                    ),
+         title = "Subject Frequency of Fake and Real News<br>Does REAL news report on different topics than FAKE news?",
+         legend=list(title=list(text='News Type'))
+         
+  )
+
+```
+
+  )
+
+It's a shame the real data types are so limited, but it does seem like true news is more likely to report on worldly affairs.
+
+
+I also want to look at the dates that the stories for each type were published. Let's look at it by month:
+
+```{r visualize2, echo=FALSE, warning=FALSE, fig.width=10}
+
+monthlyDat <- concat %>%
+  mutate("yearMonth" = substr(date, 0,7)) %>%
+  group_by(target, yearMonth) %>%
+  count(target)
+
+a <- list(
+  x = c("2016-11", "2016-06"),
+  y = c(0, 2500),
+  text = c("2016 Election Day<br>Winner:Donald Trump", "Election Year"),
+  xref = "x",
+  yref = "y",
+  showarrow = c(TRUE,FALSE),
+  arrowhead = 0,
+  ax = -0,
+  ay = -200
+)
+
+monthlyDat %>%
+  plot_ly(x=~yearMonth, y=~n, color =~target, type='scatter', mode="line+marker", colors=c("#2AB285", "#965483")) %>%
+  layout(yaxis=list(title="Count"),
+         xaxis=list(title="Month"),
+         annotations=a,
+         title = "Publishings by News Type<br>Does Time of Year Impact Fake News Output?",
+         legend=list(title=list(text='News Type')),
+         shapes = list(
+           list(
+             type="rect",
+             xref="x",
+             yref="y",
+             x0=10,
+             y0=0,
+             x1=21,
+             y1=3000,
+             fillcolor="#79CACB",
+             opacity=0.4,
+             line_width=0,
+             layer="below"
+           )
+         
+         ))
+
+```
+We see a jump in fake news when the election year stars, and a drop off around November 2017 when real news has a huge drive up
+We also see that we don't have real news data before the 2016 election, which could skew our model.
+
+Personally, the amount of fake vs real is somewhat alarming. I wonder if this dataset is skewed with having more fake datapoints,
+rather than there actually being more fake data during the election year
+
+## Cleaning the Text Data
+
+Combine the title and text columns, as they are related and we don't want to create twice as many lemmas/Corpora. 
+
+Stop words also need to be defined and cleaned out. This will help us look at the more important words with actual meaning (we don't care about words like "he", "she", "the").
+
+
+First step is to create a corpus, or the collection of the texts. I'll be using the tm library
+
+```{r cleanText, echo=TRUE}
+
+#combine columns, select only what we are interested in
+cleanData <- concat %>%
+  mutate("combText" = paste(title, text)) %>%
+  mutate("target" = ifelse(target == "Fake", 1,0)) %>%
+  select(combText, target) #Since the date range is larger for fake, and since fake has more subject identifiers than real, I am taking those out
+
+
+#Create corpus and clean the text accordingly
+corp <- VCorpus(VectorSource(cleanData$combText))
+
+stopWordsFun <- function(x) removeWords(x, c(stopwords("en"), "just", "the", "they", "get", "this", "for"))
+funs <- list(content_transformer(tolower),
+             removePunctuation,
+             removeNumbers,
+             stopWordsFun,
+             removePunctuation,
+             stripWhitespace
+             )
+
+corp <- tm_map(corp, FUN = tm_reduce, tmFuns = funs)
+corp[["1"]][["content"]]
+```
+
+We need to create lemmas from the corpus, now that the data is cleaned. Lemmas are essentially breaking down the words into 
+their base form (ex: scripted vs script). This reduces the number of words the model needs to train on without sacrificing 
+much accuracy. We can use a combination of the textstem library(which has lemmatization capability) and the tm library to 
+perform the function across all strings in our corpus
+
+
+```{r lemmas, echo=TRUE}
+
+corpLemma <- tm_map(corp, content_transformer(lemmatize_strings))
+```
+
+Next, we create the Document Term Matrix which is a matrix that shows the occurrence of every word (columns) and their
+frequency occurrence in each document (rows). This often has MANY zero values, which we will address via TF-IDF
+which calculates the importance of an individual term in relation to the entire corpus. It takes into account the frequency
+of a term in each individual document (Term Frequency) and the frequency in the entire corpus (Inverse Document Frequency)
+
+Note that I tested this with normalized data first, but the model did not perform as well as it did with non-normalized data
+
+```{r dtm, echo=TRUE, warning=FALSE}
+dtm <- DocumentTermMatrix(corpLemma)
+dtm <- removeSparseTerms(dtm, sparse = 0.98) #Could probably neglect this, but I have memory restrictions to work with
+inspect(dtm)
+dtmNorm <- weightTfIdf(dtm, normalize=FALSE)
+#dtmTFIDF <- weightTfIdf(dtm, normalize=FALSE)
+#For some reason, not all the stop words were getting taken out, so I did some manually here just to be sure
+dtmNorm <- dtmNorm[, !colnames(dtmNorm) %in% c(stopwords("en"), "just", "the", "they", "get", "this", "for")]
+#dtmNorm <- scale(dtmNorm) #Normalize after removing other stop words
+#inspect(dtmNorm)
+#inspect(dtmTFIDF)
+
+wordDF <- tidytext::tidy(dtmNorm) %>%
+  mutate("document" = as.numeric(document)) %>%
+  left_join(concat %>% 
+              select(target) %>%
+              mutate("document" = row_number()), by = "document"
+            ) %>%
+  group_by(target, term) %>%
+  mutate("totCount" = sum(count)) %>%
+  distinct(term, target, totCount) %>%
+  ungroup() %>%
+  filter(!term %in% c(stopwords("en"), "just", "the", "they", "get", "this", "for"))
+
+```
+
+## Visualization of the DTM
+
+Now that we have our individual terms and their respective targets, we can visualize them
+The following charts include:
+
+*  Word cloud of fake news
+*  Word cloud of real news
+*  Bar chart of most common words in all the dtm
+*  Bar chart of most common words in real data, with a comparison to the same word in the fake set
+*  Bar chart of most common words in fake data, with a comparison to the same word in the real set
+
+
+```{r realWords, echo=TRUE, fig.width=10}
+
+#Now that we have our individual terms and their respective targets, we can visualize them
+
+#Fake news word cloud
+wordDF %>%
+  filter(target == "Real") %>%
+  select(-target) %>%
+  arrange(desc(totCount)) %>%
+  wordcloud2(shuffle=FALSE)
+```
+
+```{r fakeWords, echo=TRUE, fig.width=10}
+#Real news word Cloud
+wordDF %>%
+  filter(target == "Fake") %>%
+  select(-target) %>%
+  arrange(desc(totCount)) %>%
+  wordcloud2(shuffle=FALSE)
+
+```
+
+
+Seems Trump was a popular guy during this time frame. Real news also seems to report less on specific politicians than fake news does. Fake news focuses on a select few words very often, while real news has a lot more variety in their word map. There are also a lot more countries mentioned in real news, supporting the above finding that real news is more likely to report on world-news than fake news is.
+
+I also feel the need to call out the fact that "fox" shows up pretty frequently in fake news. Considering they are not legally a news source, it could be possible to further indicate fake news by looking for the names of entertainment industries over legit news sources.
+
+
+```{r topWords, echo=TRUE, fig.width=10}
+#Top 10 words in both fake and real combined, and the comparison of them between the two
+top10 <- wordDF %>%
+  group_by(term) %>%
+  mutate("orderCount" = sum(totCount)) %>%
+  ungroup() %>%
+  top_n(20, orderCount) %>%
+  arrange(desc(orderCount)) %>%
+  ungroup()
+orderTop <- top10 %>%
+  distinct(term, orderCount)
+
+orderList <- factor(unique(orderTop$term), ordered=TRUE, levels=unique(orderTop$term)) #Order the bar plot in decending order
+
+top10 %>%
+  plot_ly(x=~term, y=~totCount, color =~target, type='bar', colors=c("#2AB285", "#965483")) %>%
+  layout(barmode = "stack",
+         yaxis=list(title="Count"),
+         xaxis=list(title="Word",
+                    categoryorder = "array",
+                    categoryarray = orderList
+         ),
+         title = "Overall Top 10 Frequency of words<br>What is the Distribution of the most Frequent Words?",
+         legend=list(title=list(text='News Type'))
+         
+  )
+```
+
+The top 10 words show that both sources cite the word "Trump" almost a similar number of times Fake news tends to have a  tendency to use individual's names more often than real news. Real news uses the party words like "party" and "republican" more often.
+
+
+```{r topComp, echo=TRUE, fig.width=10}
+
+#Most frequent words in the real dataset, and how the fake dataset compares to them
+topReal <- wordDF %>%
+  filter(target == "Real") %>%
+  top_n(10, totCount) %>%
+  arrange(desc(totCount))
+
+
+realBar <- wordDF %>%
+  filter(term %in% c(topReal$term)) %>%
+  arrange(desc(target), desc(totCount)) %>%
+  mutate("term" = factor(term, levels=unique(term)), #Change to factors so Plotly knows what order to put them in
+         "target" = factor(target, levels=c("Real", "Fake"))
+  ) %>%
+  plot_ly(x=~term, y=~totCount, color =~target, type='bar', colors=c("#965483", "#2AB285"), showlegend = FALSE) %>%
+  layout(yaxis=list(title="Count"),
+         xaxis=list(title="Word")
+         #title = "Top 10 Frequency of words in Real News<br>How does Fake News Compare with the Most Frequent Words in Real News?",
+         #legend=list(title=list(text='News Type'))
+         
+         
+  )
+  
+
+#Most frequent words in the fake dataset, and how the real dataset compares to them
+topFake <- wordDF %>%
+  filter(target == "Fake") %>%
+  top_n(10, totCount) %>%
+  arrange(desc(totCount))
+  
+  
+fakeBar <- wordDF %>%
+  filter(term %in% c(topFake$term)) %>%
+  arrange(desc(totCount)) %>%
+  mutate("term" = factor(term, levels=unique(term))) %>% #Change to factors so Plotly knows what order to put them in 
+  plot_ly(x=~term, y=~totCount, color =~target, type='bar', colors=c("#2AB285", "#965483")) %>%
+  layout(yaxis=list(title="Count"),
+         xaxis=list(title="Word"
+         ),
+         title = "Top 10 Most Frequent Words",
+         legend=list(title=list(text='News Type'))
+         
+  )
+
+subplot(realBar, fakeBar, shareY = TRUE) %>%
+  layout(annotations = list( 
+    list( 
+      x = 0.2,  
+      y = 1.0,  
+      text = "Top 10 Words in Real News",  
+      xref = "paper",  
+      yref = "paper",  
+      xanchor = "center",  
+      yanchor = "bottom",  
+      showarrow = FALSE 
+    ),  
+    list( 
+      x = 0.8,  
+      y = 1,  
+      text = "Top 10 Words in Fake News",  
+      xref = "paper",  
+      yref = "paper",  
+      xanchor = "center",  
+      yanchor = "bottom",  
+      showarrow = FALSE 
+    ))
+  )
+
+```
+
+
+Comparing the two in terms of word frequency, real news is fairly consistent in their most used word frequency, while, again,  fake news has a strong tendency to use politician's names. Real news also uses more "worldly" words while fake news tends to target specific groups and people (women, black, people, trump, obama, ect.).
+
+So far, it seems our indicators of fake news are:
+
+*  Overuse of politician names
+*  Lack of reporting on world events
+*  Potentially higher reporting frequency during important political events (intuitive, and real news is likely to do the same)
+*  Targeting specific people or groups of people (black, woman, Muslim, ect)
+
+
+
+## Building an RNN Model
+
+RNN models are usually a decent model when it comes to text processing. In NLP, words are not necessarily independent of one another
+because sentences are structured in specific ways. Because of that, we need a model that can take these dependencies into account. The steps to set up the data for the model are as follows:
+1. change dtm into a matrix, identify our target variable
+2. Split new matrix into training and test data
+3. Reshape the data to work with tensorflow's model creation
+4. Create the model and complie it with specific parameters
+5. Train the model
+
+First, we'll focus on splitting the data
+
+```{r splitDat, echo=TRUE}
+
+#Change dtm into a matrix
+dtmMat <- as.matrix(dtmNorm) %>%
+  scale()
+targets <- cleanData$target # Define our target variable
+
+
+#Split data into train and test data 70/30 split
+indexSplit <- sample((1:dim(dtmMat)[1]), floor(dim(dtmMat)[1]*0.70))
+trainData <- dtmMat[indexSplit, ] #70% of the data
+trainTarget <- targets[indexSplit]
+testData <- dtmMat[-indexSplit, ] #30% of the data
+testTarget <- targets[-indexSplit]
+
+#Ensure splits are valid/even. The sums of each target type should align with the cleanData's target column
+table(trainTarget)
+table(testTarget)
+table(cleanData$target)
+
+print(paste0("Real Aligns?: ", table(trainTarget)[1] + table(testTarget)[1] == table(cleanData$target)[1]))
+print(paste0("Fake Aligns?: ", table(trainTarget)[2] + table(testTarget)[2] == table(cleanData$target)[2]))
+```
+
+
+We can see by the output of the tables that our data was split properly. The sums of each table's relevant target aligns with the initial data that was cleaned above.
+
+Next, we can begin to create the model. Since this is a binary classification problem, we will use sigmoid activation with 1 neuron in the dense layer. More dimensions are usually better, but memory limitations will keep this particualr case under 300
+
+```{r createRNN, echo=TRUE}
+
+# Reshape the input for RNN
+xTrain <- array(trainData, dim = c(nrow(trainData), ncol(trainData), 1)) #Documents is the number of rows, terms is the number of columns
+xTest <- array(testData, dim = c(nrow(testData), ncol(testData), 1))
+
+# Define the RNN model architecture
+model <- keras_model_sequential() %>%
+  layer_embedding(input_dim = dim(trainData)[2], output_dim = 128, mask_zero = TRUE) %>% #unique words are the columns of the matrix. 100 dimensions because memory limits
+  layer_gru(64, return_sequences = TRUE) %>%
+  layer_lstm(units = 32, return_sequences = TRUE) %>%
+  #layer_lstm(units = 150, go_backwards = TRUE) %>%
+  layer_dense(units = 15, activation = "sigmoid") %>% #200 neurons in the dense layer, sigmoid for binary classifier
+  layer_dense(units = 1, activation = "relu") #Ensure the tensor shape comes out the same shape as the target
+
+
+# Compile the model
+model %>% compile(
+  loss = "binary_crossentropy",  # loss function
+  optimizer = "adam",  # optimizer
+  metrics = c("accuracy")  # metrics
+)
+
+#Train the model
+history <- model %>% fit(
+  x = trainData,
+  y = trainTarget,
+  epochs = 5,
+  batch_size = 32, #We can figure out number of runs in each epoch by rounding nrow(xTrain)/32 up
+  shuffle = TRUE,
+  validation_data = list(testData, testTarget)  # Include validation data
+)
+# #gc()
+history
+
+```
+
+```{r nbLoss}
+lossTrain <- history$metrics$loss
+lossVal <- history$metrics$val_loss
+epochs <- seq_along(lossTrain)
+
+# Plot the training and validation loss using plot_ly
+plot_ly() %>%
+  add_trace(x = epochs, y = lossTrain, name = "Training Loss", type = "scatter", mode = "lines", line = list(color = "#2AB285")) %>%
+  add_trace(x = epochs, y = lossVal, name = "Validation Loss", type = "scatter", mode = "lines", line = list(color = "#965483")) %>%
+  layout(title = "Training and Validation Loss",
+         xaxis = list(title = "Epoch"),
+         yaxis = list(title = "Loss"))
+```
+
+This is performing...less than ideal. Not Much better than flipping a coin, really. Our loss is a flat line, indicating this model is not ideal for this dataset.
+
+Try another approach: a naive bayes model
+
+## Building a Naive Bayes Model
+```{r svm model}
+
+
+
+
+#---------Naive Bayes Model-----------
+trainDataDF <- as.data.frame(trainData) %>%
+  select(-target) %>%
+  mutate("target" = as.factor(trainTarget))
+
+testDataDF <- as.data.frame(testData) %>%
+  mutate("target" = as.factor(testTarget)) 
+
+
+names(trainDataDF) <- make.names(names(trainDataDF))
+names(testDataDF) <- make.names(names(testDataDF))
+
+
+nbModel <- naive_bayes(target ~ ., data = trainDataDF)
+summary(nbModel)
+
+trainDataDF$nbPred <- predict(nbModel, type = 'class')
+testDataDF$nbPred <- predict(nbModel, newdata = testDataDF)
+
+caret::confusionMatrix(testDataDF$target, testDataDF$nbPred)
+```
+
+
+
+
+This performs much better, having an accuracy around 86%. With more computing power, we could optimize parameters and try something like a grid search over a support vector model.
+
+However, there are some caveats here such as ALL real data comes from Reuters. If another site has a different writing style (very likely) then it is quite possible it would still be labeled as fake simply because it doesn't have similar verbiage that Reuters uses. We can see this is quite probably the case as our specificity is a bit higher than the sensitivity
